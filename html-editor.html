@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>محرر HTML محلي</title>
+<style>
+  :root{
+    --bg:#0e0f13; --card:#181a21; --border:#2a2d37;
+    --accent:#5b8def; --text:#eef0f5; --muted:#8a8f9c;
+    --ok:#3ec97c; --warn:#e0a83e;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:560px;margin:0 auto;padding:18px 14px 40px;}
+  h1{font-size:18px;font-weight:700;margin:2px 0 14px;text-align:center;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+    padding:14px;margin-bottom:12px;}
+  label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:6px;}
+  input[type=text]{width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);
+    background:#0f1116;color:var(--text);font-size:15px;outline:none;font-family:inherit;}
+  input[type=text]:focus{border-color:var(--accent);}
+  textarea{width:100%;min-height:280px;resize:vertical;padding:12px;border-radius:9px;
+    border:1px solid var(--border);background:#0b0c10;color:#c9d1e0;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.55;
+    outline:none;direction:ltr;text-align:left;white-space:pre;}
+  textarea:focus{border-color:var(--accent);}
+  .row{display:flex;gap:8px;}
+  .row > *{flex:1;}
+  button{border:none;border-radius:10px;padding:12px 14px;font-size:14.5px;font-weight:600;
+    cursor:pointer;width:100%;}
+  button:active{transform:scale(.97);}
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-secondary{background:#242732;color:var(--text);}
+  .btn-outline{background:transparent;color:var(--accent);border:1px solid var(--accent);}
+  .status{font-size:13px;text-align:center;min-height:34px;margin-top:8px;line-height:1.5;}
+  .status.ok{color:var(--ok);}
+  .status.warn{color:var(--warn);}
+  .badge{display:inline-block;font-size:11px;padding:3px 9px;border-radius:20px;margin-bottom:8px;}
+  .badge.ok{background:#123a24;color:var(--ok);}
+  .badge.warn{background:#3a2f10;color:var(--warn);}
+  .path-display{font-size:12.5px;color:var(--muted);margin-top:6px;word-break:break-all;}
+  .hint{font-size:12px;color:var(--muted);line-height:1.7;margin-top:10px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📝 محرر HTML محلي</h1>
+
+  <div class="card" id="supportCard"></div>
+
+  <div class="card">
+    <label for="fileName">اسم الملف</label>
+    <input type="text" id="fileName" value="page.html">
+  </div>
+
+  <div class="card">
+    <label for="codeBox">كود HTML</label>
+    <textarea id="codeBox" spellcheck="false"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button class="btn-primary" id="saveBtn">💾 حفظ وتشغيل</button>
+      <button class="btn-outline" id="rememberBtn">📌 تذكر هذا المسار</button>
+    </div>
+    <div class="status" id="statusMsg"></div>
+    <div class="path-display" id="pathDisplay"></div>
+  </div>
+
+  <div class="hint" id="helpText"></div>
+</div>
+
+<script>
+const codeBox   = document.getElementById('codeBox');
+const fileName  = document.getElementById('fileName');
+const saveBtn   = document.getElementById('saveBtn');
+const rememberBtn = document.getElementById('rememberBtn');
+const statusMsg = document.getElementById('statusMsg');
+const pathDisplay = document.getElementById('pathDisplay');
+const supportCard = document.getElementById('supportCard');
+const helpText  = document.getElementById('helpText');
+
+const supportsDirPicker = 'showDirectoryPicker' in window;
+const DB_NAME = 'html-editor-db';
+const STORE   = 'handles';
+
+// ---------- IndexedDB helpers لتخزين مقبض المجلد ----------
+function openDb(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = ()=> req.result.createObjectStore(STORE);
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function idbSet(key, val){
+  const db = await openDb();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(val, key);
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+async function idbGet(key){
+  const db = await openDb();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).get(key);
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+let savedDirHandle = null;
+
+// ---------- تحميل مسودة سابقة ----------
+codeBox.value = localStorage.getItem('html_editor_code') ||
+`<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>صفحتي</title>
+</head>
+<body>
+  <h1>مرحباً 👋</h1>
+</body>
+</html>`;
+fileName.value = localStorage.getItem('html_editor_filename') || 'page.html';
+
+codeBox.addEventListener('input', ()=> localStorage.setItem('html_editor_code', codeBox.value));
+fileName.addEventListener('input', ()=> localStorage.setItem('html_editor_filename', fileName.value));
+
+// ---------- واجهة حالة الدعم ----------
+function renderSupportCard(){
+  if(supportsDirPicker){
+    supportCard.innerHTML =
+      `<span class="badge ok">✅ متصفحك يدعم اختيار مسار حفظ حقيقي</span>
+       <div style="font-size:12.5px;color:var(--muted);">اضغط «تذكر هذا المسار» مرة واحدة، وسيتم الحفظ فيه تلقائياً بعدها.</div>`;
+  } else {
+    supportCard.innerHTML =
+      `<span class="badge warn">⚠️ متصفحك (غالباً Chrome أندرويد) لا يدعم اختيار مجلد مخصص</span>
+       <div style="font-size:12.5px;color:var(--muted);">
+       سيتم حفظ الملف تلقائياً داخل مجلد <b>التنزيلات (Downloads)</b> فقط — هذا قيد من المتصفح نفسه وليس من هذه الصفحة.</div>`;
+  }
+}
+renderSupportCard();
+
+// ---------- زر: تذكر المسار ----------
+rememberBtn.addEventListener('click', async ()=>{
+  if(!supportsDirPicker){
+    statusMsg.textContent = "اختيار المجلد غير مدعوم على هذا المتصفح، سيُستخدم مجلد التنزيلات دائماً.";
+    statusMsg.className = "status warn";
+    return;
+  }
+  try{
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    await idbSet('dirHandle', handle);
+    savedDirHandle = handle;
+    pathDisplay.textContent = "📁 المسار المحفوظ: " + handle.name;
+    statusMsg.textContent = "تم حفظ المسار، سيُستخدم تلقائياً في كل مرة تضغط فيها حفظ.";
+    statusMsg.className = "status ok";
+  }catch(err){
+    statusMsg.textContent = "تم إلغاء اختيار المجلد.";
+    statusMsg.className = "status warn";
+  }
+});
+
+// ---------- استرجاع المسار عند فتح الصفحة ----------
+(async ()=>{
+  if(!supportsDirPicker) return;
+  try{
+    const handle = await idbGet('dirHandle');
+    if(handle){
+      savedDirHandle = handle;
+      pathDisplay.textContent = "📁 المسار المحفوظ: " + handle.name + " (سيُطلب تأكيد الإذن عند أول حفظ)";
+    }
+  }catch(e){ /* تجاهل */ }
+})();
+
+// ---------- الحفظ + الفتح الفوري ----------
+async function openPreview(content){
+  const blob = new Blob([content], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+}
+
+saveBtn.addEventListener('click', async ()=>{
+  const content = codeBox.value;
+  let name = fileName.value.trim() || 'page.html';
+  if(!name.toLowerCase().endsWith('.html')) name += '.html';
+  fileName.value = name;
+
+  // المسار 1: يوجد مجلد محفوظ ومدعوم
+  if(supportsDirPicker && savedDirHandle){
+    try{
+      const perm = await savedDirHandle.queryPermission({mode:'readwrite'});
+      if(perm !== 'granted'){
+        const req = await savedDirHandle.requestPermission({mode:'readwrite'});
+        if(req !== 'granted') throw new Error('no-permission');
+      }
+      const fileHandle = await savedDirHandle.getFileHandle(name, {create:true});
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      statusMsg.textContent = `تم الحفظ في: ${savedDirHandle.name}/${name} ✅`;
+      statusMsg.className = "status ok";
+      openPreview(content);
+      return;
+    }catch(err){
+      statusMsg.textContent = "تعذّر الحفظ في المسار المحفوظ، جرّب «تذكر هذا المسار» من جديد.";
+      statusMsg.className = "status warn";
+      // نكمل إلى الخيار الاحتياطي أدناه
+    }
+  }
+
+  // المسار 2: اختيار ملف فردي عبر File System Access (لو مدعوم لكن بدون مجلد محفوظ)
+  if('showSaveFilePicker' in window){
+    try{
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'HTML File', accept: {'text/html': ['.html']} }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      statusMsg.textContent = "تم الحفظ ✅";
+      statusMsg.className = "status ok";
+      openPreview(content);
+      return;
+    }catch(err){
+      // المستخدم ألغى، أو غير مدعوم فعلياً على هذا الجهاز → استمر للخيار الأخير
+    }
+  }
+
+  // المسار 3 (الاحتياطي الشامل — يعمل في كل مكان بما فيها أندرويد): تنزيل تقليدي
+  const blob = new Blob([content], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  statusMsg.textContent = `تم الحفظ في مجلد التنزيلات باسم ${name} ✅`;
+  statusMsg.className = "status ok";
+  setTimeout(()=> openPreview(content), 400);
+});
+
+helpText.innerHTML =
+  "ملاحظة مهمة: لأسباب أمنية في المتصفحات، لا يمكن لأي صفحة ويب أن تفتح ملفاً محفوظاً على القرص عبر رابط file:// مباشرة. " +
+  "لذلك بعد كل حفظ يتم فتح نفس المحتوى فوراً في تبويب جديد (تشغيل حي مطابق لما حفظته)، وهذا أقرب بديل متاح تقنياً لتشغيل الملف نفسه من مساره.";
+</script>
+</body>
+</html>
